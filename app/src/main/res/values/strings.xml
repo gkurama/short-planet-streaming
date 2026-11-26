@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">Short Planet Stream</string>
+    <string name="brand_short_planet">Short Planet</string>
+    <string name="brand_stream">Stream</string>
+    <string name="auth_eyebrow">CORTE • EDITE • PUBLIQUE</string>
+    <string name="auth_headline">Short Planet Stream</string>
+    <string name="auth_subtitle">Corte • Edite • Publique</string>
+    <string name="auth_google_button">Entrar com YouTube</string>
+    <string name="auth_signing_in">A autenticar...</string>
+    <string name="nav_home">Início</string>
+    <string name="nav_editor">Editor</string>
+    <string name="nav_templates">Templates</string>
+    <string name="nav_stats">Estatísticas</string>
+    <string name="nav_profile">Perfil</string>
+    <string name="error_generic">Ocorreu um erro inesperado. Tenta novamente.</string>
+    <string name="error_timeout">A operação demorou mais do que o esperado. Tenta novamente.</string>
+    <string name="sign_out_label">Terminar sessão</string>
+</resources>
