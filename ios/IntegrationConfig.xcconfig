@@ -1,0 +1,5 @@
+GOOGLE_IOS_CLIENT_ID = 712474228004-q9sek5ncaqi5s8cfgrsv77o80dk10f44.apps.googleusercontent.com
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.712474228004-q9sek5ncaqi5s8cfgrsv77o80dk10f44
+
+// Keep Supabase project settings in the ignored local config file.
+#include? "IntegrationConfig.local.xcconfig"
