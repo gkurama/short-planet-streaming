@@ -35,6 +35,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -94,7 +95,7 @@ fun PublishScreen(
     shortExportState: ShortExportUiState,
     youTubeUploadBusy: Boolean,
     dualPublishStatus: DualPublishStatus?,
-    onPublishNow: (clip: StudioClip, sendYouTube: Boolean, sendTikTok: Boolean, description: String) -> Unit,
+    onPublishNow: (clip: StudioClip, sendYouTube: Boolean, sendTikTok: Boolean, title: String, description: String, privacyStatus: String, madeForKids: Boolean) -> Unit,
     onSaveToGallery: (StudioClip) -> Unit,
     onShareYouTubeFallback: (StudioClip) -> Unit,
     onShareTikTokFallback: (StudioClip) -> Unit,
@@ -114,6 +115,11 @@ fun PublishScreen(
 
     var sendToYouTube by remember(activeClip?.id) { mutableStateOf(true) }
     var sendToTikTok by remember(activeClip?.id) { mutableStateOf(true) }
+    var titleText by remember(activeClip?.id, activeClip?.title) { mutableStateOf(activeClip?.title.orEmpty()) }
+    var privacyStatus by remember(activeClip?.id) { mutableStateOf("unlisted") }
+    var madeForKids by remember(activeClip?.id) { mutableStateOf<Boolean?>(null) }
+    var confirmedCommunityGuidelines by remember(activeClip?.id) { mutableStateOf(false) }
+    var confirmedRights by remember(activeClip?.id) { mutableStateOf(false) }
     var descriptionText by remember(activeClip?.id, activeClip?.publishNotes) {
         val defaultDesc = activeClip?.publishNotes?.takeIf { it.isNotBlank() }
             ?: "${activeClip?.hookText?.takeIf { it.isNotBlank() } ?: "Confira esse trecho incrível!"}\n\n#ShortPlanetStream"
@@ -390,6 +396,52 @@ fun PublishScreen(
                         }
                     }
 
+                    if (sendToYouTube) {
+                        item {
+                            Surface(
+                                shape = RoundedCornerShape(18.dp),
+                                color = SpaceNavy900,
+                                border = BorderStroke(1.dp, SpaceBorder),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text("Detalhes do YouTube", style = MaterialTheme.typography.titleMedium, color = TextPrimary, fontWeight = FontWeight.Bold)
+                                    OutlinedTextField(
+                                        value = titleText,
+                                        onValueChange = { titleText = it },
+                                        label = { Text("Título (até 100 caracteres)") },
+                                        supportingText = { Text("${titleText.length}/100") },
+                                        isError = titleText.isBlank() || titleText.length > 100,
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    Text("Visibilidade", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
+                                    listOf("unlisted" to "Não listado", "private" to "Privado", "public" to "Público").forEach { (value, label) ->
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            RadioButton(selected = privacyStatus == value, onClick = { privacyStatus = value })
+                                            Text(label, color = TextPrimary)
+                                        }
+                                    }
+                                    Text("Este vídeo é feito para crianças?", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
+                                    listOf(null to "Escolhe uma opção", true to "Sim", false to "Não").forEach { (value, label) ->
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            RadioButton(selected = madeForKids == value, onClick = { madeForKids = value })
+                                            Text(label, color = TextPrimary)
+                                        }
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(checked = confirmedRights, onCheckedChange = { confirmedRights = it })
+                                        Text("Tenho direito de editar e publicar este arquivo.", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(checked = confirmedCommunityGuidelines, onCheckedChange = { confirmedCommunityGuidelines = it })
+                                        Text("Confirmo que o vídeo segue as Diretrizes da Comunidade do YouTube.", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // "Descrição (opcional)" Box matching Screen 7
                     item {
                         Column(modifier = Modifier.fillMaxWidth()) {
@@ -429,9 +481,10 @@ fun PublishScreen(
                         val busy = youTubeUploadBusy || shortExportState is ShortExportUiState.Processing
                         PurpleGradientButton(
                             text = if (busy) "A publicar..." else "Publicar Agora",
-                            enabled = !busy && (sendToYouTube || sendToTikTok),
+                            enabled = !busy && (sendToYouTube || sendToTikTok) &&
+                                (!sendToYouTube || (titleText.isNotBlank() && titleText.length <= 100 && madeForKids != null && confirmedRights && confirmedCommunityGuidelines)),
                             onClick = {
-                                onPublishNow(activeClip, sendToYouTube, sendToTikTok, descriptionText)
+                                onPublishNow(activeClip, sendToYouTube, sendToTikTok, titleText, descriptionText, privacyStatus, madeForKids ?: false)
                             },
                             modifier = Modifier
                                 .fillMaxWidth()

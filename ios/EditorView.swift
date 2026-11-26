@@ -6,7 +6,9 @@ import UniformTypeIdentifiers
 
 struct EditorView: View {
     let templateName: String?
-    let youtubeVideo: YouTubeVideo?
+    @ObservedObject var youtube: YouTubeConnectionStore
+    @ObservedObject var supabaseAuth: SupabaseAuthStore
+    let openConnections: () -> Void
 
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var sourceURL: URL?
@@ -20,6 +22,14 @@ struct EditorView: View {
     @State private var isImporting = false
     @State private var isExporting = false
     @State private var errorMessage: String?
+    @State private var publishErrorMessage: String?
+    @State private var publishStatusMessage: String?
+    @State private var isPublishing = false
+    @State private var hasPublishingRights = false
+    @State private var confirmsCommunityGuidelines = false
+    @State private var privacyStatus = "unlisted"
+    @State private var madeForKids: Bool?
+    @State private var publishDescription = ""
 
     var body: some View {
         ScrollView {
@@ -28,34 +38,6 @@ struct EditorView: View {
                     .font(.largeTitle.weight(.heavy))
                     .foregroundStyle(.white)
                     .padding(.top, 12)
-
-                if let youtubeVideo {
-                    StudioCard {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label(
-                                youtubeVideo.isLive ? "Transmissão selecionada" : "Vídeo selecionado do YouTube",
-                                systemImage: youtubeVideo.isLive ? "dot.radiowaves.left.and.right" : "play.rectangle.fill"
-                            )
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(StudioTheme.lavender)
-
-                            Text(youtubeVideo.title)
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(.white)
-                                .lineLimit(2)
-
-                            Text("Para editar, importa do iPhone o ficheiro original autorizado deste vídeo ou da gravação da live.")
-                                .font(.caption)
-                                .foregroundStyle(StudioTheme.secondaryText)
-
-                            Link(destination: youtubeVideo.watchURL) {
-                                Label("Abrir no YouTube", systemImage: "arrow.up.right.square")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(StudioTheme.lavender)
-                            }
-                        }
-                    }
-                }
 
                 StudioCard {
                     VStack(spacing: 12) {
@@ -172,6 +154,75 @@ struct EditorView: View {
                                     .font(.caption)
                                     .foregroundStyle(StudioTheme.secondaryText)
                             }
+
+                            Divider().overlay(StudioTheme.border)
+
+                            Text("Processar e publicar no YouTube")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.white)
+
+                            Text("O Render recebe o arquivo escolhido no aparelho, cria o trecho vertical e o envia ao canal autorizado. O arquivo temporário é apagado ao terminar o pedido.")
+                                .font(.caption)
+                                .foregroundStyle(StudioTheme.secondaryText)
+
+                            TextField("Descrição do Short (opcional)", text: $publishDescription, axis: .vertical)
+                                .textFieldStyle(.roundedBorder)
+                                .lineLimit(2...5)
+
+                            Picker("Visibilidade no YouTube", selection: $privacyStatus) {
+                                Text("Não listado").tag("unlisted")
+                                Text("Privado").tag("private")
+                                Text("Público").tag("public")
+                            }
+                            .tint(StudioTheme.lavender)
+
+                            Picker("Conteúdo feito para crianças?", selection: $madeForKids) {
+                                Text("Escolhe uma opção").tag(nil as Bool?)
+                                Text("Sim").tag(true as Bool?)
+                                Text("Não").tag(false as Bool?)
+                            }
+                            .tint(StudioTheme.lavender)
+
+                            Toggle("Confirmo que tenho direito de editar e publicar este arquivo", isOn: $hasPublishingRights)
+                                .font(.caption)
+                                .tint(StudioTheme.violet)
+
+                            Toggle("Confirmo que este envio respeita as Diretrizes da Comunidade do YouTube", isOn: $confirmsCommunityGuidelines)
+                                .font(.caption)
+                                .tint(StudioTheme.violet)
+
+                            if supabaseAuth.user == nil || !youtube.isConnected {
+                                Button("Conectar conta do app e YouTube", action: openConnections)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(StudioTheme.lavender)
+                            }
+
+                            StudioPrimaryButton(
+                                title: isPublishing ? "A processar e enviar..." : "Publicar Short no YouTube",
+                                systemImage: "arrow.up.circle.fill"
+                            ) {
+                                Task { await publishToYouTube() }
+                            }
+                            .disabled(
+                                isPublishing || isExporting || !hasPublishingRights || !confirmsCommunityGuidelines ||
+                                    madeForKids == nil || titleIsInvalid || trimEnd - trimStart > 180 ||
+                                    supabaseAuth.user == nil || !youtube.isConnected
+                            )
+
+                            if isPublishing {
+                                ProgressView("O vídeo está a ser processado no Render...")
+                                    .tint(StudioTheme.lavender)
+                            }
+                            if let publishStatusMessage {
+                                Text(publishStatusMessage)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(StudioTheme.lavender)
+                            }
+                            if let publishErrorMessage {
+                                Text(publishErrorMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
                         }
                     }
                 }
@@ -205,19 +256,6 @@ struct EditorView: View {
         .onChange(of: selectedPhoto) { _, item in
             guard let item else { return }
             Task { await importVideo(item) }
-        }
-        .onChange(of: youtubeVideo?.videoID) { _, _ in
-            guard let youtubeVideo else { return }
-            player?.pause()
-            sourceURL = nil
-            sourceDuration = 0
-            player = nil
-            videoComposition = nil
-            trimStart = 0
-            trimEnd = 0
-            exportedURL = nil
-            errorMessage = nil
-            exportTitle = youtubeVideo.title
         }
         .onChange(of: trimStart) { _, start in
             if start >= trimEnd, sourceDuration > 1 {
@@ -263,7 +301,7 @@ struct EditorView: View {
             trimStart = 0
             trimEnd = min(seconds, 60)
             if exportTitle.isEmpty {
-                exportTitle = youtubeVideo?.title ?? movie.url.deletingPathExtension().lastPathComponent
+                exportTitle = movie.url.deletingPathExtension().lastPathComponent
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -329,6 +367,48 @@ struct EditorView: View {
             exportedURL = destination
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private var titleIsInvalid: Bool {
+        let title = exportTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty || title.count > 100
+    }
+
+    @MainActor
+    private func publishToYouTube() async {
+        guard let sourceURL, trimEnd > trimStart else {
+            publishErrorMessage = "Importa um arquivo e marca o trecho que queres publicar."
+            return
+        }
+        guard hasPublishingRights, confirmsCommunityGuidelines, let madeForKids else { return }
+        guard trimEnd - trimStart <= 180 else {
+            publishErrorMessage = "Um Short pode ter até 3 minutos. Ajusta o fim do trecho."
+            return
+        }
+
+        isPublishing = true
+        publishErrorMessage = nil
+        publishStatusMessage = nil
+        defer { isPublishing = false }
+
+        do {
+            let supabaseToken = try await supabaseAuth.accessTokenForBackend()
+            let youtubeToken = try await youtube.accessTokenForPublishing()
+            let result = try await RenderShortsClient.publish(
+                sourceURL: sourceURL,
+                startSeconds: trimStart,
+                endSeconds: trimEnd,
+                title: exportTitle.trimmingCharacters(in: .whitespacesAndNewlines),
+                description: publishDescription,
+                privacyStatus: privacyStatus,
+                madeForKids: madeForKids,
+                supabaseAccessToken: supabaseToken,
+                youtubeAccessToken: youtubeToken
+            )
+            publishStatusMessage = "Publicado (\(result.privacyStatus)): \(result.watchURL.absoluteString)"
+        } catch {
+            publishErrorMessage = error.localizedDescription
         }
     }
 

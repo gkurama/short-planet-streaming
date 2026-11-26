@@ -2,6 +2,10 @@ package com.example.data.remote
 
 import android.util.Log
 import android.util.Xml
+import com.example.BuildConfig
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -16,6 +20,7 @@ import org.xmlpull.v1.XmlPullParser
 import retrofit2.HttpException
 import java.io.File
 import java.io.StringReader
+import java.util.concurrent.TimeUnit
 
 private fun jsonEscape(value: String): String = buildString(value.length + 8) {
     append('"')
@@ -101,6 +106,13 @@ class YouTubeMetadataService(
     private val oEmbedApi: YouTubeOEmbedApi = YouTubeRetrofitClient.oEmbedApi,
     private val okHttpClient: OkHttpClient = YouTubeRetrofitClient.okHttpClient
 ) {
+    private val renderUploadClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(100, TimeUnit.MINUTES)
+            .readTimeout(100, TimeUnit.MINUTES)
+            .build()
+    }
 
     fun extractVideoId(input: String): String? {
         val trimmed = input.trim()
@@ -311,65 +323,60 @@ class YouTubeMetadataService(
     }
 
     /**
-     * Uploads a local MP4 Short directly to the user's YouTube channel via Data API v3 (`youtube.upload`).
+     * Sends a user-provided local MP4 to the Render media API for temporary processing and upload.
      */
     suspend fun uploadShortToYouTube(
         accessToken: String,
         mp4File: File,
         title: String,
         description: String,
-        privacyStatus: String = "public"
+        privacyStatus: String = "unlisted",
+        madeForKids: Boolean = false
     ): Result<YtVideoItem> = withContext(Dispatchers.IO) {
         if (!mp4File.exists() || mp4File.length() < 1024L) {
             return@withContext Result.failure(IllegalArgumentException("Ficheiro MP4 inválido ou vazio para envio."))
         }
         try {
-            val safeTitle = title.trim().ifBlank { "Short Planet Streaming" }
-                .let { if (it.contains("#Shorts", ignoreCase = true)) it else "$it #Shorts" }
-                .take(100)
-            val safeDesc = buildString {
-                append(description.trim())
-                if (!description.contains("#Shorts", ignoreCase = true)) {
-                    if (isNotBlank()) append("\n\n")
-                    append("#Shorts #PlanetStreaming")
-                }
-            }.take(4500)
-
-            val resolvedPrivacy = if (privacyStatus in listOf("public", "unlisted", "private")) privacyStatus else "public"
-            val rootJson = """{"snippet":{"title":${jsonEscape(safeTitle)},"description":${jsonEscape(safeDesc)},"categoryId":"22","tags":["Shorts","PlanetStreaming","YouTubeShorts"]},"status":{"privacyStatus":${jsonEscape(resolvedPrivacy)},"selfDeclaredMadeForKids":false}}"""
-
-            val metadataBody = rootJson.toRequestBody("application/json; charset=UTF-8".toMediaType())
-            val mediaBody = mp4File.asRequestBody("video/mp4".toMediaType())
-            val multipartRelatedBody = MultipartBody.Builder()
-                .setType("multipart/related".toMediaType())
-                .addPart(metadataBody)
-                .addPart(mediaBody)
+            val baseUrl = BuildConfig.RENDER_API_BASE_URL.trim().trimEnd('/')
+            if (!baseUrl.startsWith("https://")) {
+                return@withContext Result.failure(IllegalStateException("O endereço HTTPS do backend Render ainda não foi configurado."))
+            }
+            val firebaseToken = Firebase.auth.currentUser?.getIdToken(false)?.await()?.token
+                ?: return@withContext Result.failure(IllegalStateException("Inicie sessão no aplicativo antes de publicar."))
+            val resolvedPrivacy = privacyStatus.takeIf { it in listOf("public", "unlisted", "private") } ?: "unlisted"
+            val formBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", "short.mp4", mp4File.asRequestBody("video/mp4".toMediaType()))
+                .addFormDataPart("start_seconds", "0")
+                .addFormDataPart("end_seconds", "180")
+                .addFormDataPart("title", title.trim())
+                .addFormDataPart("description", description.trim())
+                .addFormDataPart("privacy_status", resolvedPrivacy)
+                .addFormDataPart("made_for_kids", madeForKids.toString())
                 .build()
-
-            val item = dataApi.uploadVideo(
-                body = multipartRelatedBody,
-                authorization = "Bearer $accessToken"
-            )
-            Result.success(item)
-        } catch (e: HttpException) {
-            val code = e.code()
-            val body = try { e.response()?.errorBody()?.string() } catch (_: Exception) { null }
-            val reason = extractGoogleApiReason(body)
-            if (code == 401) {
-                return@withContext Result.failure(YouTubeUnauthorizedException("Sessão de envio expirada."))
+            val request = Request.Builder()
+                .url("$baseUrl/v1/shorts/publish")
+                .header("Authorization", "Bearer $firebaseToken")
+                .header("X-YouTube-Authorization", "Bearer $accessToken")
+                .post(formBody)
+                .build()
+            renderUploadClient.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    val detail = runCatching { JSONObject(responseBody).optString("detail") }.getOrNull()
+                    Result.failure(Exception(detail?.takeIf { it.isNotBlank() } ?: "Falha no processamento ou envio do Short (HTTP ${response.code})."))
+                } else {
+                    val videoId = JSONObject(responseBody).optString("video_id")
+                    if (videoId.isBlank()) {
+                        Result.failure(Exception("O backend Render não devolveu o ID do vídeo publicado."))
+                    } else {
+                        Result.success(YtVideoItem(id = videoId))
+                    }
+                }
             }
-            if (reason == "accessNotConfigured") {
-                return@withContext Result.failure(
-                    YouTubeApiDisabledException(
-                        "A YouTube Data API v3 ainda precisa de ativação no Google Cloud para envio direto."
-                    )
-                )
-            }
-            val msg = parseGoogleApiError(body) ?: "Falha no envio para o YouTube (HTTP $code)."
-            Result.failure(Exception(msg, e))
         } catch (e: Exception) {
-            Log.e(TAG, "Failed uploading Short MP4 to YouTube", e)
-            Result.failure(e)
+            Log.e(TAG, "Render/YouTube publishing failed: ${e.javaClass.simpleName}")
+            Result.failure(Exception(e.localizedMessage ?: "Falha ao publicar Short via Render."))
         }
     }
 

@@ -337,7 +337,7 @@ fun SelectVideoScreen(
                 }
             }
 
-            // Bottom Pinned "Continuar (N)" CTA matching Screen 4
+            // YouTube library entries open in YouTube. Editing begins from a local file below.
             Surface(
                 color = SpaceNavy950,
                 modifier = Modifier.fillMaxWidth()
@@ -345,7 +345,7 @@ fun SelectVideoScreen(
                 Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                     val isBusy = autopilotBusySourceId != null
                     PurpleGradientButton(
-                        text = if (isBusy) "A preparar no Editor..." else "Continuar (${selectedObjects.size})",
+                        text = if (isBusy) "A abrir no YouTube..." else "Abrir no YouTube (${selectedObjects.size})",
                         enabled = selectedObjects.isNotEmpty() && !isBusy,
                         onClick = { onContinueWithSelected(selectedObjects) },
                         modifier = Modifier

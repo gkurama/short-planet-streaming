@@ -3,7 +3,9 @@ package com.example.ui.navigation
 import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.content.ContextWrapper
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -199,7 +201,10 @@ private fun AuthenticatedStudioShell(
     var pendingYouTubeUploadClip by remember { mutableStateOf<StudioClip?>(null) }
     var pendingSendYouTube by remember { mutableStateOf(true) }
     var pendingSendTikTok by remember { mutableStateOf(true) }
+    var pendingPublishTitle by remember { mutableStateOf("") }
     var pendingDescription by remember { mutableStateOf("") }
+    var pendingPrivacyStatus by remember { mutableStateOf("unlisted") }
+    var pendingMadeForKids by remember { mutableStateOf(false) }
 
     val youtubeConsentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
@@ -220,7 +225,10 @@ private fun AuthenticatedStudioShell(
         val clipToRetry = pendingYouTubeUploadClip
         val retryYt = pendingSendYouTube
         val retryTt = pendingSendTikTok
+        val retryTitle = pendingPublishTitle
         val retryDesc = pendingDescription
+        val retryPrivacy = pendingPrivacyStatus
+        val retryMadeForKids = pendingMadeForKids
         pendingYouTubeUploadClip = null
         if (clipToRetry == null) return@rememberLauncherForActivityResult
 
@@ -230,7 +238,10 @@ private fun AuthenticatedStudioShell(
                 clip = clipToRetry,
                 sendToYouTube = retryYt,
                 sendToTikTok = retryTt,
-                description = retryDesc
+                title = retryTitle,
+                description = retryDesc,
+                privacyStatus = retryPrivacy,
+                madeForKids = retryMadeForKids
             )
             return@rememberLauncherForActivityResult
         }
@@ -241,7 +252,10 @@ private fun AuthenticatedStudioShell(
                     clip = clipToRetry,
                     sendToYouTube = retryYt,
                     sendToTikTok = retryTt,
-                    description = retryDesc
+                    title = retryTitle,
+                    description = retryDesc,
+                    privacyStatus = retryPrivacy,
+                    madeForKids = retryMadeForKids
                 )
             },
             onFailure = {
@@ -250,7 +264,10 @@ private fun AuthenticatedStudioShell(
                     clip = clipToRetry,
                     sendToYouTube = retryYt,
                     sendToTikTok = retryTt,
-                    description = retryDesc
+                    title = retryTitle,
+                    description = retryDesc,
+                    privacyStatus = retryPrivacy,
+                    madeForKids = retryMadeForKids
                 )
             }
         )
@@ -428,11 +445,7 @@ private fun AuthenticatedStudioShell(
                                 navController.navigate(ROUTE_SELECT_VIDEO)
                             },
                             onOpenVideoInEditor = { video ->
-                                viewModel.importSelectedLibraryVideosAndOpenEditor(
-                                    videos = listOf(video),
-                                    context = context,
-                                    onComplete = { navigateTopLevel(ROUTE_EDITOR) }
-                                )
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(video.url)))
                             },
                             onOpenClipInEditor = { clipId ->
                                 viewModel.selectClip(clipId)
@@ -458,11 +471,9 @@ private fun AuthenticatedStudioShell(
                             onSearchQueryChange = viewModel::updateYouTubeSearchQuery,
                             onLoadMoreYouTube = viewModel::loadMoreYouTubeVideos,
                             onContinueWithSelected = { selectedVideos ->
-                                viewModel.importSelectedLibraryVideosAndOpenEditor(
-                                    videos = selectedVideos,
-                                    context = context,
-                                    onComplete = { navigateTopLevel(ROUTE_EDITOR) }
-                                )
+                                selectedVideos.firstOrNull()?.let { video ->
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(video.url)))
+                                }
                             },
                             onPickLocalVideo = { uri ->
                                 viewModel.generateAutoMp4ShortsFromLocalVideo(context, uri) {
@@ -590,19 +601,25 @@ private fun AuthenticatedStudioShell(
                             shortExportState = shortExportState,
                             youTubeUploadBusy = youTubeUploadBusy,
                             dualPublishStatus = dualPublishStatus,
-                            onPublishNow = { clip, sendYt, sendTt, desc ->
+                            onPublishNow = { clip, sendYt, sendTt, title, desc, privacy, madeForKids ->
                                 viewModel.publishWithSelectedPlatforms(
                                     context = context,
                                     clip = clip,
                                     sendToYouTube = sendYt,
                                     sendToTikTok = sendTt,
+                                    title = title,
                                     description = desc,
+                                    privacyStatus = privacy,
+                                    madeForKids = madeForKids,
                                     activity = context.findActivity(),
                                     onNeedsUploadConsent = { req ->
                                         pendingYouTubeUploadClip = clip
                                         pendingSendYouTube = sendYt
                                         pendingSendTikTok = sendTt
+                                        pendingPublishTitle = title
                                         pendingDescription = desc
+                                        pendingPrivacyStatus = privacy
+                                        pendingMadeForKids = madeForKids
                                         youtubeUploadConsentLauncher.launch(req)
                                     }
                                 )

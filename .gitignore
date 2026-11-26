@@ -34,3 +34,5 @@ app/google-services.json
 *.ipa
 ios/build/
 public/assets/aistudio/screen-*.mp4
+__pycache__/
+*.py[cod]

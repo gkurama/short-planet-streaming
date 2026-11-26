@@ -2,4 +2,5 @@ GOOGLE_IOS_CLIENT_ID = 712474228004-q9sek5ncaqi5s8cfgrsv77o80dk10f44.apps.google
 GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.712474228004-q9sek5ncaqi5s8cfgrsv77o80dk10f44
 
 // Keep Supabase project settings in the ignored local config file.
+RENDER_API_BASE_URL = https:/$()/short-planet-media-api.onrender.com
 #include? "IntegrationConfig.local.xcconfig"

@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: short-planet-media-api
+    runtime: docker
+    region: frankfurt
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: SUPABASE_URL
+        value: https://zhvemqilkuwgcatqzccb.supabase.co
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        value: gen-lang-client-0066336139
+      - key: MAX_UPLOAD_MB
+        value: "512"

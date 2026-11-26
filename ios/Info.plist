@@ -26,6 +26,8 @@
 	<string>$(SUPABASE_URL)</string>
 	<key>SupabasePublishableKey</key>
 	<string>$(SUPABASE_PUBLISHABLE_KEY)</string>
+	<key>RenderAPIBaseURL</key>
+	<string>$(RENDER_API_BASE_URL)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
