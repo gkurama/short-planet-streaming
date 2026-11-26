@@ -7,7 +7,7 @@ services:
     dockerfilePath: ./backend/Dockerfile
     dockerContext: .
     healthCheckPath: /healthz
-    autoDeployTrigger: commit
+    autoDeployTrigger: "off"
     envVars:
       - key: SUPABASE_URL
         value: https://zhvemqilkuwgcatqzccb.supabase.co
