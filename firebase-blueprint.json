@@ -1,0 +1,105 @@
+{
+  "entities": {
+    "VideoSource": {
+      "title": "VideoSource",
+      "description": "Imported YouTube video or livestream source for AI clip extraction.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID" },
+        "youtubeUrl": { "type": "string", "description": "Source YouTube URL" },
+        "youtubeVideoId": { "type": "string", "description": "Extracted YouTube 11-char video ID" },
+        "title": { "type": "string", "description": "Video or livestream title" },
+        "channelName": { "type": "string", "description": "YouTube channel or creator name" },
+        "sourceType": { "type": "string", "enum": ["VIDEO", "LIVE"] },
+        "durationLabel": { "type": "string", "description": "Human-readable duration label" },
+        "status": { "type": "string", "enum": ["IMPORTED", "ANALYZED", "ARCHIVED"] },
+        "aiSummary": { "type": "string", "description": "AI-generated summary of the source content" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on create" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
+      },
+      "required": ["userId", "youtubeUrl", "youtubeVideoId", "title", "channelName", "sourceType", "durationLabel", "status", "aiSummary", "createdAt", "updatedAt"]
+    },
+    "StudioClip": {
+      "title": "StudioClip",
+      "description": "Short vertical video clip generated or edited in Planet Streaming.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID" },
+        "sourceId": { "type": "string", "description": "Parent VideoSource document ID or empty if manual" },
+        "sourceTitle": { "type": "string", "description": "Title of parent VideoSource" },
+        "title": { "type": "string", "description": "Clip title" },
+        "hookText": { "type": "string", "description": "Opening hook text for the first 3 seconds" },
+        "startTime": { "type": "string", "description": "Start timestamp label (e.g. 12:34)" },
+        "endTime": { "type": "string", "description": "End timestamp label (e.g. 13:18)" },
+        "durationSeconds": { "type": "integer", "description": "Clip duration in seconds" },
+        "viralScore": { "type": "integer", "description": "AI viral potential score (0-100)" },
+        "aspectRatio": { "type": "string", "enum": ["9:16", "1:1", "16:9"] },
+        "captionStyle": { "type": "string", "enum": ["Dinâmico", "Minimalista", "Alto contraste"] },
+        "framingMode": { "type": "string", "enum": ["Seguir pessoa", "Centro", "Manual"] },
+        "captionsText": { "type": "string", "description": "Generated or edited subtitle lines" },
+        "highlightKeywords": { "type": "string", "description": "Comma-separated keywords highlighted in captions" },
+        "targetPlatform": { "type": "string", "enum": ["YOUTUBE_SHORTS", "TIKTOK", "BOTH"] },
+        "publishStatus": { "type": "string", "enum": ["DRAFT", "READY", "SCHEDULED", "PUBLISHED"] },
+        "publishNotes": { "type": "string", "description": "Publishing caption and hashtags" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on create" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
+      },
+      "required": [
+        "userId", "sourceId", "sourceTitle", "title", "hookText", "startTime", "endTime",
+        "durationSeconds", "viralScore", "aspectRatio", "captionStyle", "framingMode",
+        "captionsText", "highlightKeywords", "targetPlatform", "publishStatus", "publishNotes",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "StylePreferences": {
+      "title": "StylePreferences",
+      "description": "User editing preferences respected by Autopiloto IA and Clip Editor.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID" },
+        "editingPace": { "type": "string", "enum": ["Dinâmico", "Equilibrado", "Calmo"] },
+        "captionPreset": { "type": "string", "enum": ["Destacadas", "Discretas", "Sem legendas"] },
+        "framingPreset": { "type": "string", "enum": ["Seguir pessoa", "Centro", "Manual"] },
+        "preferredDuration": { "type": "string", "enum": ["15–30 segundos", "30–60 segundos", "60–90 segundos"] },
+        "brandTone": { "type": "string", "description": "Creator voice/tone description" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on create" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
+      },
+      "required": ["userId", "editingPace", "captionPreset", "framingPreset", "preferredDuration", "brandTone", "createdAt", "updatedAt"]
+    },
+    "TrendItem": {
+      "title": "TrendItem",
+      "description": "Saved short-form content trend or viral format idea.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID" },
+        "topic": { "type": "string", "description": "Trend topic or niche" },
+        "format": { "type": "string", "description": "Short-form video format" },
+        "hookIdea": { "type": "string", "description": "Suggested opening hook" },
+        "platform": { "type": "string", "enum": ["YouTube Shorts", "TikTok", "Ambos"] },
+        "heatScore": { "type": "integer", "description": "Trend momentum score (0-100)" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on create" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
+      },
+      "required": ["userId", "topic", "format", "hookIdea", "platform", "heatScore", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/sources/{sourceId}": {
+      "schema": { "$ref": "#/entities/VideoSource" },
+      "description": "User-owned imported YouTube videos and livestreams."
+    },
+    "/users/{userId}/clips/{clipId}": {
+      "schema": { "$ref": "#/entities/StudioClip" },
+      "description": "User-owned vertical clips and publishing metadata."
+    },
+    "/users/{userId}/preferences/{prefId}": {
+      "schema": { "$ref": "#/entities/StylePreferences" },
+      "description": "User editing style preferences (document id: style)."
+    },
+    "/users/{userId}/trends/{trendId}": {
+      "schema": { "$ref": "#/entities/TrendItem" },
+      "description": "User-saved trend radar opportunities."
+    }
+  }
+}

@@ -1,0 +1,203 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Shared Security Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Validation Helpers ---
+    function isValidVideoSource(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.youtubeUrl is string && data.youtubeUrl.size() >= 5 && data.youtubeUrl.size() <= 500 &&
+             data.youtubeVideoId is string && data.youtubeVideoId.size() <= 32 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+             data.channelName is string && data.channelName.size() <= 120 &&
+             data.sourceType in ['VIDEO', 'LIVE'] &&
+             data.durationLabel is string && data.durationLabel.size() <= 30 &&
+             data.status in ['IMPORTED', 'ANALYZED', 'ARCHIVED'] &&
+             data.aiSummary is string && data.aiSummary.size() <= 1500 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidStudioClip(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.sourceId is string && data.sourceId.size() <= 128 &&
+             data.sourceTitle is string && data.sourceTitle.size() <= 200 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+             data.hookText is string && data.hookText.size() <= 260 &&
+             data.startTime is string && data.startTime.size() <= 20 &&
+             data.endTime is string && data.endTime.size() <= 20 &&
+             data.durationSeconds is int && data.durationSeconds >= 5 && data.durationSeconds <= 300 &&
+             data.viralScore is int && data.viralScore >= 0 && data.viralScore <= 100 &&
+             data.aspectRatio in ['9:16', '1:1', '16:9'] &&
+             data.captionStyle in ['Dinâmico', 'Minimalista', 'Alto contraste'] &&
+             data.framingMode in ['Seguir pessoa', 'Centro', 'Manual'] &&
+             data.captionsText is string && data.captionsText.size() <= 2500 &&
+             data.highlightKeywords is string && data.highlightKeywords.size() <= 240 &&
+             data.targetPlatform in ['YOUTUBE_SHORTS', 'TIKTOK', 'BOTH'] &&
+             data.publishStatus in ['DRAFT', 'READY', 'SCHEDULED', 'PUBLISHED'] &&
+             data.publishNotes is string && data.publishNotes.size() <= 600 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidStylePreferences(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.editingPace in ['Dinâmico', 'Equilibrado', 'Calmo'] &&
+             data.captionPreset in ['Destacadas', 'Discretas', 'Sem legendas'] &&
+             data.framingPreset in ['Seguir pessoa', 'Centro', 'Manual'] &&
+             data.preferredDuration in ['15–30 segundos', '30–60 segundos', '60–90 segundos'] &&
+             data.brandTone is string && data.brandTone.size() <= 160 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidTrendItem(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.topic is string && data.topic.size() >= 1 && data.topic.size() <= 140 &&
+             data.format is string && data.format.size() >= 1 && data.format.size() <= 100 &&
+             data.hookIdea is string && data.hookIdea.size() >= 1 && data.hookIdea.size() <= 300 &&
+             data.platform in ['YouTube Shorts', 'TikTok', 'Ambos'] &&
+             data.heatScore is int && data.heatScore >= 0 && data.heatScore <= 100 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // --- User-Scoped Collections ---
+    match /users/{userId} {
+      match /sources/{sourceId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(sourceId);
+        allow create: if isOwner(userId) &&
+                         isValidId(sourceId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'youtubeUrl', 'youtubeVideoId', 'title', 'channelName',
+                           'sourceType', 'durationLabel', 'status', 'aiSummary', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'youtubeUrl', 'youtubeVideoId', 'title', 'channelName',
+                           'sourceType', 'durationLabel', 'status', 'aiSummary', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidVideoSource(incoming());
+        allow update: if isOwner(userId) &&
+                         isValidId(sourceId) &&
+                         isValidVideoSource(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         (
+                           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'aiSummary', 'updatedAt']) ||
+                           incoming().diff(existing()).affectedKeys().hasOnly(['title', 'channelName', 'sourceType', 'durationLabel', 'status', 'aiSummary', 'updatedAt'])
+                         );
+        allow delete: if isOwner(userId) && isValidId(sourceId);
+      }
+
+      match /clips/{clipId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(clipId);
+        allow create: if isOwner(userId) &&
+                         isValidId(clipId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'sourceId', 'sourceTitle', 'title', 'hookText', 'startTime', 'endTime',
+                           'durationSeconds', 'viralScore', 'aspectRatio', 'captionStyle', 'framingMode',
+                           'captionsText', 'highlightKeywords', 'targetPlatform', 'publishStatus', 'publishNotes',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'sourceId', 'sourceTitle', 'title', 'hookText', 'startTime', 'endTime',
+                           'durationSeconds', 'viralScore', 'aspectRatio', 'captionStyle', 'framingMode',
+                           'captionsText', 'highlightKeywords', 'targetPlatform', 'publishStatus', 'publishNotes',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidStudioClip(incoming());
+        allow update: if isOwner(userId) &&
+                         isValidId(clipId) &&
+                         isValidStudioClip(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         (
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'title', 'hookText', 'startTime', 'endTime', 'durationSeconds',
+                             'aspectRatio', 'captionStyle', 'framingMode', 'captionsText',
+                             'highlightKeywords', 'updatedAt'
+                           ]) ||
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'targetPlatform', 'publishStatus', 'publishNotes', 'updatedAt'
+                           ])
+                         );
+        allow delete: if isOwner(userId) && isValidId(clipId);
+      }
+
+      match /preferences/{prefId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(prefId);
+        allow create: if isOwner(userId) &&
+                         prefId == 'style' &&
+                         incoming().keys().hasAll([
+                           'userId', 'editingPace', 'captionPreset', 'framingPreset',
+                           'preferredDuration', 'brandTone', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'editingPace', 'captionPreset', 'framingPreset',
+                           'preferredDuration', 'brandTone', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidStylePreferences(incoming());
+        allow update: if isOwner(userId) &&
+                         prefId == 'style' &&
+                         isValidStylePreferences(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'editingPace', 'captionPreset', 'framingPreset',
+                           'preferredDuration', 'brandTone', 'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && isValidId(prefId);
+      }
+
+      match /trends/{trendId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(trendId);
+        allow create: if isOwner(userId) &&
+                         isValidId(trendId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'topic', 'format', 'hookIdea', 'platform', 'heatScore', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'topic', 'format', 'hookIdea', 'platform', 'heatScore', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidTrendItem(incoming());
+        allow update: if isOwner(userId) &&
+                         isValidId(trendId) &&
+                         isValidTrendItem(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'topic', 'format', 'hookIdea', 'platform', 'heatScore', 'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && isValidId(trendId);
+      }
+    }
+  }
+}

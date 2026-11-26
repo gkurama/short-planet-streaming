@@ -1,0 +1,36 @@
+*.iml
+.gradle
+.kotlin
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+.env
+debug.keystore
+*-debug.log
+ios/GoogleService-Info.plist
+ios/Secrets.xcconfig
+ios/IntegrationConfig.local.xcconfig
+
+# Exclude local credentials and configuration from public snapshots.
+**/.env*
+!**/.env*.example
+!**/.env.example
+app/google-services.json
+
+# Exclude user-specific and generated artifacts.
+**/.DS_Store
+**/xcuserdata/
+*.xcuserstate
+*.ipa
+ios/build/
+public/assets/aistudio/screen-*.mp4

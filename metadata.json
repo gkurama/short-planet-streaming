@@ -1,0 +1,6 @@
+{
+  "name": "Short Planet Stream",
+  "description": "Corte, edite e publique Shorts do YouTube e Lives no YouTube Shorts e TikTok.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
