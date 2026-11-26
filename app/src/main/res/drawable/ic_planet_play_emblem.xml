@@ -1,0 +1,67 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer soft purple aura -->
+    <path android:pathData="M54,18 A36,36 0 1,1 53.99,18 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54"
+                android:centerY="54"
+                android:gradientRadius="42"
+                android:startColor="#559333EA"
+                android:endColor="#00080414" />
+        </aapt:attr>
+    </path>
+
+    <!-- Back orbital ring -->
+    <path
+        android:pathData="M18,69 C28,55 46,43 70,36 C82,32.5 91,34 90,39"
+        android:strokeWidth="5.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:strokeColor="#6D28D9" />
+
+    <!-- Planet Sphere -->
+    <path android:pathData="M54,28 A26,26 0 1,1 53.99,28 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="30"
+                android:startY="28"
+                android:endX="78"
+                android:endY="80"
+                android:startColor="#C084FC"
+                android:centerColor="#7C3AED"
+                android:endColor="#3B0764" />
+        </aapt:attr>
+    </path>
+
+    <!-- Front orbital ring crossing sphere -->
+    <path
+        android:pathData="M18,69 C20,76 41,73 64,62 C82,53 93,43 90,39"
+        android:strokeWidth="6.2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="18"
+                android:startY="72"
+                android:endX="90"
+                android:endY="38"
+                android:startColor="#A855F7"
+                android:centerColor="#C084FC"
+                android:endColor="#7C3AED" />
+        </aapt:attr>
+    </path>
+
+    <!-- Rounded White Play Triangle -->
+    <path
+        android:pathData="M47,43.5 C47,41.8 48.9,40.8 50.4,41.7 L66.5,51.2 C68,52.1 68,54.3 66.5,55.2 L50.4,64.7 C48.9,65.6 47,64.6 47,62.9 Z"
+        android:fillColor="#FFFFFF" />
+</vector>
