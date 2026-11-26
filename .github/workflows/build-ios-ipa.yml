@@ -1,0 +1,48 @@
+name: Build iOS IPA (Short Planet Stream)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/build-ios-ipa.yml'
+
+jobs:
+  build-ios-ipa:
+    name: Archive & Export iOS IPA
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Build & Package IPA (when Xcode project is present)
+        env:
+          IOS_SCHEME: ShortPlanetStream
+        run: |
+          if [ -d "ios/ShortPlanetStream.xcodeproj" ]; then
+            xcodebuild -project ios/ShortPlanetStream.xcodeproj \
+              -scheme "$IOS_SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath "$RUNNER_TEMP/ShortPlanetStream.xcarchive" \
+              CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+              clean archive
+
+            mkdir -p "$RUNNER_TEMP/ipa_export/Payload"
+            cp -R "$RUNNER_TEMP/ShortPlanetStream.xcarchive/Products/Applications/"*.app "$RUNNER_TEMP/ipa_export/Payload/"
+            (cd "$RUNNER_TEMP/ipa_export" && zip -r "$GITHUB_WORKSPACE/ShortPlanetStream.ipa" Payload)
+          else
+            echo "Adiciona o teu ShortPlanetStream.xcodeproj em ios/ com ios/ShortPlanetStreamApp.swift e exporta via ios/ExportOptions.plist."
+          fi
+
+      - name: Upload IPA Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShortPlanetStream-iOS-IPA
+          path: ShortPlanetStream.ipa
+          if-no-files-found: ignore
