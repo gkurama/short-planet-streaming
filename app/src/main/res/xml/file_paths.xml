@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <cache-path
+        name="shared_covers"
+        path="shared_covers/" />
+    <files-path
+        name="rendered_shorts"
+        path="rendered_shorts/" />
+    <files-path
+        name="covers"
+        path="covers/" />
+</paths>
