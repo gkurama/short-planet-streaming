@@ -1,0 +1,27 @@
+services:
+  studio-builder:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: short-planet-stream-builder
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+      - gradle-cache:/root/.gradle
+    environment:
+      - ANDROID_SDK_ROOT=/opt/android-sdk
+      - JAVA_TOOL_OPTIONS=-Xmx2048m
+    command: ["test"]
+
+  ios-prep:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: short-planet-stream-ios-prep
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    command: ["ios-prep"]
+
+volumes:
+  gradle-cache:
