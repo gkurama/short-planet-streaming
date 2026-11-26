@@ -22,7 +22,7 @@ android {
     buildConfigField(
       "String",
       "RENDER_API_BASE_URL",
-      "\"https://short-planet-media-api.onrender.com\""
+      "\"https://short-planet-media-api-b5lz.onrender.com\""
     )
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
