@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import shutil
 import subprocess
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from typing import Annotated, Literal
 
 import jwt
 import requests
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from jwt import PyJWKClient
 
@@ -335,3 +338,163 @@ async def publish_short(
         privacy_status=privacy_status,
         duration_seconds=round(actual_duration, 2),
     )
+
+
+
+class CreatePublishJobRequest(BaseModel):
+    start_seconds: float
+    end_seconds: float
+    title: str
+    description: str = ""
+    privacy_status: Literal["private", "unlisted", "public"] = "unlisted"
+    made_for_kids: bool = False
+
+
+class CreatePublishJobResponse(BaseModel):
+    job_id: str
+
+
+PUBLISH_JOB_TTL_SECONDS = 15 * 60
+publish_jobs: dict[str, dict] = {}
+
+
+def _cleanup_expired_publish_jobs() -> None:
+    now = time.monotonic()
+    expired = [
+        job_id
+        for job_id, job in publish_jobs.items()
+        if job["state"] == "pending" and now - job["created_at"] > PUBLISH_JOB_TTL_SECONDS
+    ]
+    for job_id in expired:
+        job = publish_jobs.pop(job_id, None)
+        if job:
+            shutil.rmtree(job["workdir"], ignore_errors=True)
+
+
+@app.post("/v1/shorts/jobs", response_model=CreatePublishJobResponse)
+async def create_publish_job(
+    payload: CreatePublishJobRequest,
+    user: Annotated[dict, Depends(_authenticated_user)],
+) -> CreatePublishJobResponse:
+    """Create a short-lived upload slot; source media is sent separately as a raw body."""
+    clean_title = payload.title.strip()
+    if not clean_title or len(payload.title) > 100:
+        raise HTTPException(status_code=422, detail="O título é obrigatório e pode ter até 100 caracteres.")
+    if len(payload.description) > 5000:
+        raise HTTPException(status_code=422, detail="A descrição excede 5000 caracteres.")
+    if isinstance(payload.start_seconds, bool) or isinstance(payload.end_seconds, bool):
+        raise HTTPException(status_code=422, detail="O intervalo de corte é inválido.")
+    if (
+        not math.isfinite(payload.start_seconds)
+        or not math.isfinite(payload.end_seconds)
+        or payload.start_seconds < 0
+        or payload.end_seconds - payload.start_seconds <= 0
+        or payload.end_seconds - payload.start_seconds > 180
+    ):
+        raise HTTPException(status_code=422, detail="O trecho precisa ter entre 1 segundo e 3 minutos.")
+
+    _cleanup_expired_publish_jobs()
+    owner_id = str(user["id"])
+    active_jobs = sum(1 for job in publish_jobs.values() if job["owner_id"] == owner_id)
+    if active_jobs >= 3:
+        raise HTTPException(status_code=429, detail="Já existem três envios pendentes. Tenta novamente dentro de alguns minutos.")
+
+    job_id = str(uuid.uuid4())
+    workdir = tempfile.mkdtemp(prefix="shortplanet-job-")
+    publish_jobs[job_id] = {
+        "owner_id": owner_id,
+        "created_at": time.monotonic(),
+        "state": "pending",
+        "workdir": workdir,
+        "metadata": payload.model_dump() if hasattr(payload, "model_dump") else payload.dict(),
+    }
+    return CreatePublishJobResponse(job_id=job_id)
+
+
+@app.put("/v1/shorts/jobs/{job_id}/source", response_model=PublishResult)
+async def upload_publish_job_source(
+    job_id: str,
+    request: Request,
+    user: Annotated[dict, Depends(_authenticated_user)],
+    youtube_authorization: Annotated[str | None, Header(alias="X-YouTube-Authorization")] = None,
+) -> PublishResult:
+    """Stream a selected original to Render, trim/upload it, and immediately remove temporary media."""
+    access_token = _bearer(youtube_authorization, "Autorização YouTube")
+    _cleanup_expired_publish_jobs()
+    job = publish_jobs.get(job_id)
+    if not job or job["owner_id"] != str(user["id"]):
+        raise HTTPException(status_code=404, detail="O envio expirou ou não pertence a esta conta.")
+    if job["state"] != "pending":
+        raise HTTPException(status_code=409, detail="Este envio já foi iniciado.")
+    job["state"] = "uploading"
+
+    content_type = request.headers.get("content-type", "").lower()
+    if not content_type.startswith("video/"):
+        publish_jobs.pop(job_id, None)
+        shutil.rmtree(job["workdir"], ignore_errors=True)
+        raise HTTPException(status_code=415, detail="O corpo do pedido precisa ser um arquivo de vídeo.")
+    try:
+        content_length = int(request.headers.get("content-length", "0"))
+    except ValueError:
+        content_length = 0
+    if content_length > MAX_UPLOAD_BYTES:
+        publish_jobs.pop(job_id, None)
+        shutil.rmtree(job["workdir"], ignore_errors=True)
+        raise HTTPException(status_code=413, detail=f"O vídeo excede o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+
+    extension = ".mov" if content_type == "video/quicktime" else (".m4v" if content_type == "video/x-m4v" else ".mp4")
+    workdir = Path(job["workdir"])
+    source = workdir / f"source{extension}"
+    output = workdir / "short.mp4"
+    metadata = job["metadata"]
+    start_seconds = float(metadata["start_seconds"])
+    end_seconds = float(metadata["end_seconds"])
+    actual_duration = 0.0
+    try:
+        total = 0
+        try:
+            with source.open("wb") as destination:
+                async for chunk in request.stream():
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > MAX_UPLOAD_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"O vídeo excede o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+                        )
+                    destination.write(chunk)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=400, detail="A transferência do vídeo foi interrompida.") from None
+
+        if total == 0:
+            raise HTTPException(status_code=400, detail="O arquivo de vídeo está vazio.")
+        source_duration = await asyncio.to_thread(_probe_duration, source)
+        if start_seconds >= source_duration:
+            raise HTTPException(status_code=422, detail="O início selecionado ultrapassa a duração do vídeo.")
+        actual_duration = min(end_seconds, source_duration) - start_seconds
+        if actual_duration <= 0 or actual_duration > 180:
+            raise HTTPException(status_code=422, detail="O trecho precisa ter entre 1 segundo e 3 minutos.")
+
+        await asyncio.to_thread(_youtube_channel_id, access_token)
+        await asyncio.to_thread(_run_ffmpeg, source, output, start_seconds, actual_duration)
+        video_id = await asyncio.to_thread(
+            _youtube_upload,
+            access_token,
+            output,
+            metadata["title"].strip(),
+            metadata["description"].strip(),
+            metadata["privacy_status"],
+            metadata["made_for_kids"],
+        )
+        return PublishResult(
+            video_id=video_id,
+            watch_url=f"https://www.youtube.com/shorts/{video_id}",
+            privacy_status=metadata["privacy_status"],
+            duration_seconds=round(actual_duration, 2),
+        )
+    finally:
+        publish_jobs.pop(job_id, None)
+        shutil.rmtree(workdir, ignore_errors=True)

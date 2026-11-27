@@ -14,6 +14,32 @@ struct RenderPublishResult: Decodable {
     }
 }
 
+private struct RenderPublishMetadata: Encodable {
+    let startSeconds: Double
+    let endSeconds: Double
+    let title: String
+    let description: String
+    let privacyStatus: String
+    let madeForKids: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case startSeconds = "start_seconds"
+        case endSeconds = "end_seconds"
+        case title
+        case description
+        case privacyStatus = "privacy_status"
+        case madeForKids = "made_for_kids"
+    }
+}
+
+private struct RenderJobResponse: Decodable {
+    let jobID: String
+
+    enum CodingKeys: String, CodingKey {
+        case jobID = "job_id"
+    }
+}
+
 enum RenderShortsClient {
     static func publish(
         sourceURL: URL,
@@ -41,58 +67,65 @@ enum RenderShortsClient {
             throw RenderShortsError.invalidRange
         }
 
-        let boundary = "ShortPlanet-\(UUID().uuidString)"
-        let multipartURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("shortplanet-upload-\(UUID().uuidString).multipart")
-        FileManager.default.createFile(atPath: multipartURL.path, contents: nil)
-        defer { try? FileManager.default.removeItem(at: multipartURL) }
-
-        let output = try FileHandle(forWritingTo: multipartURL)
-        defer { try? output.close() }
-
-        func writeField(_ name: String, _ value: String) throws {
-            let header = "--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n"
-            try output.write(contentsOf: Data(header.utf8))
-            try output.write(contentsOf: Data(value.utf8))
-            try output.write(contentsOf: Data("\r\n".utf8))
-        }
-
-        try writeField("start_seconds", String(startSeconds))
-        try writeField("end_seconds", String(endSeconds))
-        try writeField("title", title)
-        try writeField("description", description)
-        try writeField("privacy_status", privacyStatus)
-        try writeField("made_for_kids", madeForKids ? "true" : "false")
-
         let ext = sourceURL.pathExtension.lowercased()
         let mimeType = ext == "mov" ? "video/quicktime" : (ext == "m4v" ? "video/x-m4v" : "video/mp4")
-        let safeExtension = ["mp4", "mov", "m4v", "mkv", "webm", "avi"].contains(ext) ? ext : "mp4"
-        let fileHeader = "--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"source.\(safeExtension)\"\r\nContent-Type: \(mimeType)\r\n\r\n"
-        try output.write(contentsOf: Data(fileHeader.utf8))
-
-        let input = try FileHandle(forReadingFrom: sourceURL)
-        defer { try? input.close() }
-        while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
-            try output.write(contentsOf: chunk)
-        }
-        try output.write(contentsOf: Data("\r\n--\(boundary)--\r\n".utf8))
-        try output.close()
-
-        let endpoint = baseURL.appendingPathComponent("v1/shorts/publish")
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 5_400
-        request.setValue("Bearer \(supabaseAccessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("Bearer \(youtubeAccessToken)", forHTTPHeaderField: "X-YouTube-Authorization")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let metadata = RenderPublishMetadata(
+            startSeconds: startSeconds,
+            endSeconds: endSeconds,
+            title: title,
+            description: description,
+            privacyStatus: privacyStatus,
+            madeForKids: madeForKids
+        )
+        var jobsEndpoint = baseURL
+        jobsEndpoint.appendPathComponent("v1")
+        jobsEndpoint.appendPathComponent("shorts")
+        jobsEndpoint.appendPathComponent("jobs")
+        var createRequest = URLRequest(url: jobsEndpoint)
+        createRequest.httpMethod = "POST"
+        createRequest.timeoutInterval = 60
+        createRequest.setValue("Bearer \(supabaseAccessToken)", forHTTPHeaderField: "Authorization")
+        createRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        createRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        createRequest.httpBody = try JSONEncoder().encode(metadata)
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 5_400
         configuration.timeoutIntervalForResource = 5_400
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
-        let (data, response) = try await session.upload(for: request, fromFile: multipartURL)
+
+        let (jobData, jobResponse) = try await session.data(for: createRequest)
+        guard let jobHTTPResponse = jobResponse as? HTTPURLResponse else {
+            throw RenderShortsError.invalidResponse
+        }
+        guard (200..<300).contains(jobHTTPResponse.statusCode) else {
+            let detail = (try? JSONDecoder().decode(RenderErrorResponse.self, from: jobData).detail)
+            throw RenderShortsError.server(detail ?? "O Render recusou preparar o processamento (HTTP \(jobHTTPResponse.statusCode)).")
+        }
+
+        let jobID: String
+        do {
+            jobID = try JSONDecoder().decode(RenderJobResponse.self, from: jobData).jobID
+        } catch {
+            throw RenderShortsError.invalidResponse
+        }
+
+        var uploadEndpoint = baseURL
+        uploadEndpoint.appendPathComponent("v1")
+        uploadEndpoint.appendPathComponent("shorts")
+        uploadEndpoint.appendPathComponent("jobs")
+        uploadEndpoint.appendPathComponent(jobID)
+        uploadEndpoint.appendPathComponent("source")
+        var uploadRequest = URLRequest(url: uploadEndpoint)
+        uploadRequest.httpMethod = "PUT"
+        uploadRequest.timeoutInterval = 5_400
+        uploadRequest.setValue("Bearer \(supabaseAccessToken)", forHTTPHeaderField: "Authorization")
+        uploadRequest.setValue("Bearer \(youtubeAccessToken)", forHTTPHeaderField: "X-YouTube-Authorization")
+        uploadRequest.setValue(mimeType, forHTTPHeaderField: "Content-Type")
+        uploadRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await session.upload(for: uploadRequest, fromFile: sourceURL)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw RenderShortsError.invalidResponse
         }
