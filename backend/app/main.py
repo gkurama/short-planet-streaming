@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
 import math
 import os
 import shutil
 import subprocess
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -340,63 +340,117 @@ async def publish_short(
     )
 
 
-@app.post("/v1/shorts/publish-stream", response_model=PublishResult)
-async def publish_short_stream(
+
+class CreatePublishJobRequest(BaseModel):
+    start_seconds: float
+    end_seconds: float
+    title: str
+    description: str = ""
+    privacy_status: Literal["private", "unlisted", "public"] = "unlisted"
+    made_for_kids: bool = False
+
+
+class CreatePublishJobResponse(BaseModel):
+    job_id: str
+
+
+PUBLISH_JOB_TTL_SECONDS = 15 * 60
+publish_jobs: dict[str, dict] = {}
+
+
+def _cleanup_expired_publish_jobs() -> None:
+    now = time.monotonic()
+    expired = [
+        job_id
+        for job_id, job in publish_jobs.items()
+        if job["state"] == "pending" and now - job["created_at"] > PUBLISH_JOB_TTL_SECONDS
+    ]
+    for job_id in expired:
+        job = publish_jobs.pop(job_id, None)
+        if job:
+            shutil.rmtree(job["workdir"], ignore_errors=True)
+
+
+@app.post("/v1/shorts/jobs", response_model=CreatePublishJobResponse)
+async def create_publish_job(
+    payload: CreatePublishJobRequest,
+    user: Annotated[dict, Depends(_authenticated_user)],
+) -> CreatePublishJobResponse:
+    """Create a short-lived upload slot; source media is sent separately as a raw body."""
+    clean_title = payload.title.strip()
+    if not clean_title or len(payload.title) > 100:
+        raise HTTPException(status_code=422, detail="O título é obrigatório e pode ter até 100 caracteres.")
+    if len(payload.description) > 5000:
+        raise HTTPException(status_code=422, detail="A descrição excede 5000 caracteres.")
+    if isinstance(payload.start_seconds, bool) or isinstance(payload.end_seconds, bool):
+        raise HTTPException(status_code=422, detail="O intervalo de corte é inválido.")
+    if (
+        not math.isfinite(payload.start_seconds)
+        or not math.isfinite(payload.end_seconds)
+        or payload.start_seconds < 0
+        or payload.end_seconds - payload.start_seconds <= 0
+        or payload.end_seconds - payload.start_seconds > 180
+    ):
+        raise HTTPException(status_code=422, detail="O trecho precisa ter entre 1 segundo e 3 minutos.")
+
+    _cleanup_expired_publish_jobs()
+    owner_id = str(user["id"])
+    active_jobs = sum(1 for job in publish_jobs.values() if job["owner_id"] == owner_id)
+    if active_jobs >= 3:
+        raise HTTPException(status_code=429, detail="Já existem três envios pendentes. Tenta novamente dentro de alguns minutos.")
+
+    job_id = str(uuid.uuid4())
+    workdir = tempfile.mkdtemp(prefix="shortplanet-job-")
+    publish_jobs[job_id] = {
+        "owner_id": owner_id,
+        "created_at": time.monotonic(),
+        "state": "pending",
+        "workdir": workdir,
+        "metadata": payload.model_dump() if hasattr(payload, "model_dump") else payload.dict(),
+    }
+    return CreatePublishJobResponse(job_id=job_id)
+
+
+@app.put("/v1/shorts/jobs/{job_id}/source", response_model=PublishResult)
+async def upload_publish_job_source(
+    job_id: str,
     request: Request,
-    _user: Annotated[dict, Depends(_authenticated_user)],
+    user: Annotated[dict, Depends(_authenticated_user)],
     youtube_authorization: Annotated[str | None, Header(alias="X-YouTube-Authorization")] = None,
 ) -> PublishResult:
-    """Accept the selected original as the request body, avoiding a second full copy on the phone."""
+    """Stream a selected original to Render, trim/upload it, and immediately remove temporary media."""
     access_token = _bearer(youtube_authorization, "Autorização YouTube")
-    encoded_metadata = request.headers.get("x-short-metadata", "")
-    try:
-        padded_metadata = encoded_metadata + "=" * (-len(encoded_metadata) % 4)
-        metadata = json.loads(base64.b64decode(padded_metadata, validate=True))
-    except (ValueError, json.JSONDecodeError):
-        raise HTTPException(status_code=400, detail="Metadados do corte inválidos.") from None
-    if not isinstance(metadata, dict):
-        raise HTTPException(status_code=400, detail="Metadados do corte inválidos.")
-
-    try:
-        start_seconds = float(metadata["start_seconds"])
-        end_seconds = float(metadata["end_seconds"])
-    except (KeyError, TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="O intervalo de corte é inválido.") from None
-    title = metadata.get("title")
-    description = metadata.get("description", "")
-    privacy_status = metadata.get("privacy_status", "unlisted")
-    made_for_kids = metadata.get("made_for_kids", False)
-    if not isinstance(title, str) or not title.strip() or len(title) > 100:
-        raise HTTPException(status_code=422, detail="O título é obrigatório e pode ter até 100 caracteres.")
-    if not isinstance(description, str) or len(description) > 5000:
-        raise HTTPException(status_code=422, detail="A descrição excede 5000 caracteres.")
-    if privacy_status not in {"private", "unlisted", "public"}:
-        raise HTTPException(status_code=422, detail="Escolhe uma visibilidade válida para o YouTube.")
-    if not isinstance(made_for_kids, bool):
-        raise HTTPException(status_code=422, detail="A declaração de conteúdo infantil é inválida.")
-    if not isinstance(privacy_status, str) or privacy_status not in {"private", "unlisted", "public"}:
-        raise HTTPException(status_code=422, detail="Escolhe uma visibilidade válida para o YouTube.")
-    if isinstance(metadata.get("start_seconds"), bool) or isinstance(metadata.get("end_seconds"), bool):
-        raise HTTPException(status_code=422, detail="O intervalo de corte é inválido.")
-    requested_duration = end_seconds - start_seconds
-    if not math.isfinite(start_seconds) or not math.isfinite(end_seconds) or start_seconds < 0 or requested_duration <= 0 or requested_duration > 180:
-        raise HTTPException(status_code=422, detail="O trecho precisa ter entre 1 segundo e 3 minutos.")
+    _cleanup_expired_publish_jobs()
+    job = publish_jobs.get(job_id)
+    if not job or job["owner_id"] != str(user["id"]):
+        raise HTTPException(status_code=404, detail="O envio expirou ou não pertence a esta conta.")
+    if job["state"] != "pending":
+        raise HTTPException(status_code=409, detail="Este envio já foi iniciado.")
+    job["state"] = "uploading"
 
     content_type = request.headers.get("content-type", "").lower()
     if not content_type.startswith("video/"):
+        publish_jobs.pop(job_id, None)
+        shutil.rmtree(job["workdir"], ignore_errors=True)
         raise HTTPException(status_code=415, detail="O corpo do pedido precisa ser um arquivo de vídeo.")
     try:
         content_length = int(request.headers.get("content-length", "0"))
     except ValueError:
         content_length = 0
     if content_length > MAX_UPLOAD_BYTES:
+        publish_jobs.pop(job_id, None)
+        shutil.rmtree(job["workdir"], ignore_errors=True)
         raise HTTPException(status_code=413, detail=f"O vídeo excede o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
 
     extension = ".mov" if content_type == "video/quicktime" else (".m4v" if content_type == "video/x-m4v" else ".mp4")
-    with tempfile.TemporaryDirectory(prefix="shortplanet-") as temporary_directory:
-        workdir = Path(temporary_directory)
-        source = workdir / f"source{extension}"
-        output = workdir / "short.mp4"
+    workdir = Path(job["workdir"])
+    source = workdir / f"source{extension}"
+    output = workdir / "short.mp4"
+    metadata = job["metadata"]
+    start_seconds = float(metadata["start_seconds"])
+    end_seconds = float(metadata["end_seconds"])
+    actual_duration = 0.0
+    try:
         total = 0
         try:
             with source.open("wb") as destination:
@@ -430,15 +484,17 @@ async def publish_short_stream(
             _youtube_upload,
             access_token,
             output,
-            title.strip(),
-            description.strip(),
-            privacy_status,
-            made_for_kids,
+            metadata["title"].strip(),
+            metadata["description"].strip(),
+            metadata["privacy_status"],
+            metadata["made_for_kids"],
         )
-
-    return PublishResult(
-        video_id=video_id,
-        watch_url=f"https://www.youtube.com/shorts/{video_id}",
-        privacy_status=privacy_status,
-        duration_seconds=round(actual_duration, 2),
-    )
+        return PublishResult(
+            video_id=video_id,
+            watch_url=f"https://www.youtube.com/shorts/{video_id}",
+            privacy_status=metadata["privacy_status"],
+            duration_seconds=round(actual_duration, 2),
+        )
+    finally:
+        publish_jobs.pop(job_id, None)
+        shutil.rmtree(workdir, ignore_errors=True)
