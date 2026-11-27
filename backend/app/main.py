@@ -316,7 +316,7 @@ async def publish_short(
         if actual_duration <= 0 or actual_duration > 180:
             raise HTTPException(status_code=422, detail="O trecho precisa ter entre 1 segundo e 3 minutos.")
 
-        _youtube_channel_id(access_token)
+        await asyncio.to_thread(_youtube_channel_id, access_token)
         await asyncio.to_thread(_run_ffmpeg, source, output, start_seconds, actual_duration)
         video_id = await asyncio.to_thread(
             _youtube_upload,
