@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -373,8 +374,12 @@ async def publish_short_stream(
         raise HTTPException(status_code=422, detail="Escolhe uma visibilidade válida para o YouTube.")
     if not isinstance(made_for_kids, bool):
         raise HTTPException(status_code=422, detail="A declaração de conteúdo infantil é inválida.")
+    if not isinstance(privacy_status, str) or privacy_status not in {"private", "unlisted", "public"}:
+        raise HTTPException(status_code=422, detail="Escolhe uma visibilidade válida para o YouTube.")
+    if isinstance(metadata.get("start_seconds"), bool) or isinstance(metadata.get("end_seconds"), bool):
+        raise HTTPException(status_code=422, detail="O intervalo de corte é inválido.")
     requested_duration = end_seconds - start_seconds
-    if start_seconds < 0 or requested_duration <= 0 or requested_duration > 180:
+    if not math.isfinite(start_seconds) or not math.isfinite(end_seconds) or start_seconds < 0 or requested_duration <= 0 or requested_duration > 180:
         raise HTTPException(status_code=422, detail="O trecho precisa ter entre 1 segundo e 3 minutos.")
 
     content_type = request.headers.get("content-type", "").lower()
