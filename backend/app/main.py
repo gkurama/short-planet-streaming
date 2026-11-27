@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import os
 import shutil
 import subprocess
@@ -10,7 +12,7 @@ from typing import Annotated, Literal
 
 import jwt
 import requests
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from jwt import PyJWKClient
 
@@ -328,6 +330,106 @@ async def publish_short(
             made_for_kids,
         )
         # The token and media are held only for this request and temporary directory.
+
+    return PublishResult(
+        video_id=video_id,
+        watch_url=f"https://www.youtube.com/shorts/{video_id}",
+        privacy_status=privacy_status,
+        duration_seconds=round(actual_duration, 2),
+    )
+
+
+@app.post("/v1/shorts/publish-stream", response_model=PublishResult)
+async def publish_short_stream(
+    request: Request,
+    _user: Annotated[dict, Depends(_authenticated_user)],
+    youtube_authorization: Annotated[str | None, Header(alias="X-YouTube-Authorization")] = None,
+) -> PublishResult:
+    """Accept the selected original as the request body, avoiding a second full copy on the phone."""
+    access_token = _bearer(youtube_authorization, "Autorização YouTube")
+    encoded_metadata = request.headers.get("x-short-metadata", "")
+    try:
+        padded_metadata = encoded_metadata + "=" * (-len(encoded_metadata) % 4)
+        metadata = json.loads(base64.b64decode(padded_metadata, validate=True))
+    except (ValueError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Metadados do corte inválidos.") from None
+    if not isinstance(metadata, dict):
+        raise HTTPException(status_code=400, detail="Metadados do corte inválidos.")
+
+    try:
+        start_seconds = float(metadata["start_seconds"])
+        end_seconds = float(metadata["end_seconds"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="O intervalo de corte é inválido.") from None
+    title = metadata.get("title")
+    description = metadata.get("description", "")
+    privacy_status = metadata.get("privacy_status", "unlisted")
+    made_for_kids = metadata.get("made_for_kids", False)
+    if not isinstance(title, str) or not title.strip() or len(title) > 100:
+        raise HTTPException(status_code=422, detail="O título é obrigatório e pode ter até 100 caracteres.")
+    if not isinstance(description, str) or len(description) > 5000:
+        raise HTTPException(status_code=422, detail="A descrição excede 5000 caracteres.")
+    if privacy_status not in {"private", "unlisted", "public"}:
+        raise HTTPException(status_code=422, detail="Escolhe uma visibilidade válida para o YouTube.")
+    if not isinstance(made_for_kids, bool):
+        raise HTTPException(status_code=422, detail="A declaração de conteúdo infantil é inválida.")
+    requested_duration = end_seconds - start_seconds
+    if start_seconds < 0 or requested_duration <= 0 or requested_duration > 180:
+        raise HTTPException(status_code=422, detail="O trecho precisa ter entre 1 segundo e 3 minutos.")
+
+    content_type = request.headers.get("content-type", "").lower()
+    if not content_type.startswith("video/"):
+        raise HTTPException(status_code=415, detail="O corpo do pedido precisa ser um arquivo de vídeo.")
+    try:
+        content_length = int(request.headers.get("content-length", "0"))
+    except ValueError:
+        content_length = 0
+    if content_length > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"O vídeo excede o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+
+    extension = ".mov" if content_type == "video/quicktime" else (".m4v" if content_type == "video/x-m4v" else ".mp4")
+    with tempfile.TemporaryDirectory(prefix="shortplanet-") as temporary_directory:
+        workdir = Path(temporary_directory)
+        source = workdir / f"source{extension}"
+        output = workdir / "short.mp4"
+        total = 0
+        try:
+            with source.open("wb") as destination:
+                async for chunk in request.stream():
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > MAX_UPLOAD_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"O vídeo excede o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+                        )
+                    destination.write(chunk)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=400, detail="A transferência do vídeo foi interrompida.") from None
+
+        if total == 0:
+            raise HTTPException(status_code=400, detail="O arquivo de vídeo está vazio.")
+        source_duration = await asyncio.to_thread(_probe_duration, source)
+        if start_seconds >= source_duration:
+            raise HTTPException(status_code=422, detail="O início selecionado ultrapassa a duração do vídeo.")
+        actual_duration = min(end_seconds, source_duration) - start_seconds
+        if actual_duration <= 0 or actual_duration > 180:
+            raise HTTPException(status_code=422, detail="O trecho precisa ter entre 1 segundo e 3 minutos.")
+
+        await asyncio.to_thread(_youtube_channel_id, access_token)
+        await asyncio.to_thread(_run_ffmpeg, source, output, start_seconds, actual_duration)
+        video_id = await asyncio.to_thread(
+            _youtube_upload,
+            access_token,
+            output,
+            title.strip(),
+            description.strip(),
+            privacy_status,
+            made_for_kids,
+        )
 
     return PublishResult(
         video_id=video_id,
