@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 
 struct EditorView: View {
     let templateName: String?
+    let youtubeVideo: YouTubeVideo?
     @ObservedObject var youtube: YouTubeConnectionStore
     @ObservedObject var supabaseAuth: SupabaseAuthStore
     let openConnections: () -> Void
@@ -30,6 +31,7 @@ struct EditorView: View {
     @State private var privacyStatus = "unlisted"
     @State private var madeForKids: Bool?
     @State private var publishDescription = ""
+    @State private var editorIsVisible = true
 
     var body: some View {
         ScrollView {
@@ -38,6 +40,34 @@ struct EditorView: View {
                     .font(.largeTitle.weight(.heavy))
                     .foregroundStyle(.white)
                     .padding(.top, 12)
+
+                if let youtubeVideo {
+                    StudioCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(
+                                youtubeVideo.isLive ? "Transmissão selecionada" : "Vídeo selecionado do YouTube",
+                                systemImage: youtubeVideo.isLive ? "dot.radiowaves.left.and.right" : "play.rectangle.fill"
+                            )
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(StudioTheme.lavender)
+
+                            Text(youtubeVideo.title)
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.white)
+                                .lineLimit(2)
+
+                            Text("Para editar, importa do iPhone o ficheiro original autorizado deste vídeo ou da gravação da live.")
+                                .font(.caption)
+                                .foregroundStyle(StudioTheme.secondaryText)
+
+                            Link(destination: youtubeVideo.watchURL) {
+                                Label("Abrir no YouTube", systemImage: "arrow.up.right.square")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(StudioTheme.lavender)
+                            }
+                        }
+                    }
+                }
 
                 StudioCard {
                     VStack(spacing: 12) {
@@ -161,7 +191,7 @@ struct EditorView: View {
                                 .font(.subheadline.weight(.bold))
                                 .foregroundStyle(.white)
 
-                            Text("O Render recebe o arquivo escolhido no aparelho, cria o trecho vertical e o envia ao canal autorizado. O arquivo temporário é apagado ao terminar o pedido.")
+                            Text("O Render recebe o original selecionado, prepara o Short 9:16 e envia ao YouTube. O arquivo é processado em armazenamento temporário no servidor e apagado ao terminar o pedido.")
                                 .font(.caption)
                                 .foregroundStyle(StudioTheme.secondaryText)
 
@@ -257,6 +287,17 @@ struct EditorView: View {
             guard let item else { return }
             Task { await importVideo(item) }
         }
+        .onAppear {
+            editorIsVisible = true
+        }
+        .onChange(of: youtubeVideo?.videoID) { _, _ in
+            guard !isPublishing else { return }
+            clearTemporaryEditorMedia()
+            trimStart = 0
+            trimEnd = 0
+            errorMessage = nil
+            exportTitle = youtubeVideo?.title ?? ""
+        }
         .onChange(of: trimStart) { _, start in
             if start >= trimEnd, sourceDuration > 1 {
                 trimEnd = min(sourceDuration, start + 1)
@@ -268,7 +309,10 @@ struct EditorView: View {
             }
         }
         .onDisappear {
-            player?.pause()
+            editorIsVisible = false
+            if !isPublishing {
+                clearTemporaryEditorMedia()
+            }
         }
     }
 
@@ -276,7 +320,7 @@ struct EditorView: View {
     private func importVideo(_ item: PhotosPickerItem) async {
         isImporting = true
         errorMessage = nil
-        exportedURL = nil
+        var newlyImportedURL: URL?
         defer {
             isImporting = false
             selectedPhoto = nil
@@ -286,6 +330,7 @@ struct EditorView: View {
             guard let movie = try await item.loadTransferable(type: ImportedMovie.self) else {
                 throw EditorError.cannotReadVideo
             }
+            newlyImportedURL = movie.url
             let asset = AVURLAsset(url: movie.url)
             let seconds = try await asset.load(.duration).seconds
             guard seconds.isFinite, seconds > 1 else {
@@ -294,16 +339,22 @@ struct EditorView: View {
             let composition = try await Self.makeVerticalVideoComposition(for: asset)
             let playerItem = AVPlayerItem(asset: asset)
             playerItem.videoComposition = composition
+            let previousSourceURL = sourceURL
+            let previousExportedURL = exportedURL
             sourceURL = movie.url
             sourceDuration = seconds
             videoComposition = composition
             player = AVPlayer(playerItem: playerItem)
+            newlyImportedURL = nil
+            discardTemporaryMedia(at: previousSourceURL)
+            discardTemporaryMedia(at: previousExportedURL)
             trimStart = 0
             trimEnd = min(seconds, 60)
             if exportTitle.isEmpty {
-                exportTitle = movie.url.deletingPathExtension().lastPathComponent
+                exportTitle = youtubeVideo?.title ?? movie.url.deletingPathExtension().lastPathComponent
             }
         } catch {
+            discardTemporaryMedia(at: newlyImportedURL)
             errorMessage = error.localizedDescription
         }
     }
@@ -323,7 +374,6 @@ struct EditorView: View {
 
         isExporting = true
         errorMessage = nil
-        exportedURL = nil
         defer { isExporting = false }
 
         do {
@@ -364,10 +414,30 @@ struct EditorView: View {
                     }
                 }
             }
+            discardTemporaryMedia(at: exportedURL)
             exportedURL = destination
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func discardTemporaryMedia(at url: URL?) {
+        guard let url else { return }
+        let temporaryDirectory = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        let filePath = url.standardizedFileURL.path
+        guard filePath.hasPrefix(temporaryDirectory + "/") else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private func clearTemporaryEditorMedia() {
+        discardTemporaryMedia(at: sourceURL)
+        discardTemporaryMedia(at: exportedURL)
+        player?.pause()
+        player = nil
+        sourceURL = nil
+        exportedURL = nil
+        sourceDuration = 0
+        videoComposition = nil
     }
 
     private var titleIsInvalid: Bool {
@@ -378,7 +448,7 @@ struct EditorView: View {
     @MainActor
     private func publishToYouTube() async {
         guard let sourceURL, trimEnd > trimStart else {
-            publishErrorMessage = "Importa um arquivo e marca o trecho que queres publicar."
+            publishErrorMessage = "Importa um arquivo original e marca o trecho que queres publicar."
             return
         }
         guard hasPublishingRights, confirmsCommunityGuidelines, let madeForKids else { return }
@@ -390,7 +460,12 @@ struct EditorView: View {
         isPublishing = true
         publishErrorMessage = nil
         publishStatusMessage = nil
-        defer { isPublishing = false }
+        defer {
+            isPublishing = false
+            if !editorIsVisible {
+                clearTemporaryEditorMedia()
+            }
+        }
 
         do {
             let supabaseToken = try await supabaseAuth.accessTokenForBackend()
