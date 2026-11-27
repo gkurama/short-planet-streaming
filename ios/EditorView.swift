@@ -7,6 +7,9 @@ import UniformTypeIdentifiers
 struct EditorView: View {
     let templateName: String?
     let youtubeVideo: YouTubeVideo?
+    @ObservedObject var youtube: YouTubeConnectionStore
+    @ObservedObject var supabaseAuth: SupabaseAuthStore
+    let openConnections: () -> Void
 
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var sourceURL: URL?
@@ -20,6 +23,15 @@ struct EditorView: View {
     @State private var isImporting = false
     @State private var isExporting = false
     @State private var errorMessage: String?
+    @State private var publishErrorMessage: String?
+    @State private var publishStatusMessage: String?
+    @State private var isPublishing = false
+    @State private var hasPublishingRights = false
+    @State private var confirmsCommunityGuidelines = false
+    @State private var privacyStatus = "unlisted"
+    @State private var madeForKids: Bool?
+    @State private var publishDescription = ""
+    @State private var editorIsVisible = true
 
     var body: some View {
         ScrollView {
@@ -172,6 +184,75 @@ struct EditorView: View {
                                     .font(.caption)
                                     .foregroundStyle(StudioTheme.secondaryText)
                             }
+
+                            Divider().overlay(StudioTheme.border)
+
+                            Text("Processar e publicar no YouTube")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.white)
+
+                            Text("O Render recebe o original selecionado, prepara o Short 9:16 e envia ao YouTube. O arquivo é processado em armazenamento temporário no servidor e apagado ao terminar o pedido.")
+                                .font(.caption)
+                                .foregroundStyle(StudioTheme.secondaryText)
+
+                            TextField("Descrição do Short (opcional)", text: $publishDescription, axis: .vertical)
+                                .textFieldStyle(.roundedBorder)
+                                .lineLimit(2...5)
+
+                            Picker("Visibilidade no YouTube", selection: $privacyStatus) {
+                                Text("Não listado").tag("unlisted")
+                                Text("Privado").tag("private")
+                                Text("Público").tag("public")
+                            }
+                            .tint(StudioTheme.lavender)
+
+                            Picker("Conteúdo feito para crianças?", selection: $madeForKids) {
+                                Text("Escolhe uma opção").tag(nil as Bool?)
+                                Text("Sim").tag(true as Bool?)
+                                Text("Não").tag(false as Bool?)
+                            }
+                            .tint(StudioTheme.lavender)
+
+                            Toggle("Confirmo que tenho direito de editar e publicar este arquivo", isOn: $hasPublishingRights)
+                                .font(.caption)
+                                .tint(StudioTheme.violet)
+
+                            Toggle("Confirmo que este envio respeita as Diretrizes da Comunidade do YouTube", isOn: $confirmsCommunityGuidelines)
+                                .font(.caption)
+                                .tint(StudioTheme.violet)
+
+                            if supabaseAuth.user == nil || !youtube.isConnected {
+                                Button("Conectar conta do app e YouTube", action: openConnections)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(StudioTheme.lavender)
+                            }
+
+                            StudioPrimaryButton(
+                                title: isPublishing ? "A processar e enviar..." : "Publicar Short no YouTube",
+                                systemImage: "arrow.up.circle.fill"
+                            ) {
+                                Task { await publishToYouTube() }
+                            }
+                            .disabled(
+                                isPublishing || isExporting || !hasPublishingRights || !confirmsCommunityGuidelines ||
+                                    madeForKids == nil || titleIsInvalid || trimEnd - trimStart > 180 ||
+                                    supabaseAuth.user == nil || !youtube.isConnected
+                            )
+
+                            if isPublishing {
+                                ProgressView("O vídeo está a ser processado no Render...")
+                                    .tint(StudioTheme.lavender)
+                            }
+                            if let publishStatusMessage {
+                                Text(publishStatusMessage)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(StudioTheme.lavender)
+                            }
+                            if let publishErrorMessage {
+                                Text(publishErrorMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
                         }
                     }
                 }
@@ -206,18 +287,16 @@ struct EditorView: View {
             guard let item else { return }
             Task { await importVideo(item) }
         }
+        .onAppear {
+            editorIsVisible = true
+        }
         .onChange(of: youtubeVideo?.videoID) { _, _ in
-            guard let youtubeVideo else { return }
-            player?.pause()
-            sourceURL = nil
-            sourceDuration = 0
-            player = nil
-            videoComposition = nil
+            guard !isPublishing else { return }
+            clearTemporaryEditorMedia()
             trimStart = 0
             trimEnd = 0
-            exportedURL = nil
             errorMessage = nil
-            exportTitle = youtubeVideo.title
+            exportTitle = youtubeVideo?.title ?? ""
         }
         .onChange(of: trimStart) { _, start in
             if start >= trimEnd, sourceDuration > 1 {
@@ -230,7 +309,10 @@ struct EditorView: View {
             }
         }
         .onDisappear {
-            player?.pause()
+            editorIsVisible = false
+            if !isPublishing {
+                clearTemporaryEditorMedia()
+            }
         }
     }
 
@@ -238,7 +320,7 @@ struct EditorView: View {
     private func importVideo(_ item: PhotosPickerItem) async {
         isImporting = true
         errorMessage = nil
-        exportedURL = nil
+        var newlyImportedURL: URL?
         defer {
             isImporting = false
             selectedPhoto = nil
@@ -248,6 +330,7 @@ struct EditorView: View {
             guard let movie = try await item.loadTransferable(type: ImportedMovie.self) else {
                 throw EditorError.cannotReadVideo
             }
+            newlyImportedURL = movie.url
             let asset = AVURLAsset(url: movie.url)
             let seconds = try await asset.load(.duration).seconds
             guard seconds.isFinite, seconds > 1 else {
@@ -256,16 +339,22 @@ struct EditorView: View {
             let composition = try await Self.makeVerticalVideoComposition(for: asset)
             let playerItem = AVPlayerItem(asset: asset)
             playerItem.videoComposition = composition
+            let previousSourceURL = sourceURL
+            let previousExportedURL = exportedURL
             sourceURL = movie.url
             sourceDuration = seconds
             videoComposition = composition
             player = AVPlayer(playerItem: playerItem)
+            newlyImportedURL = nil
+            discardTemporaryMedia(at: previousSourceURL)
+            discardTemporaryMedia(at: previousExportedURL)
             trimStart = 0
             trimEnd = min(seconds, 60)
             if exportTitle.isEmpty {
                 exportTitle = youtubeVideo?.title ?? movie.url.deletingPathExtension().lastPathComponent
             }
         } catch {
+            discardTemporaryMedia(at: newlyImportedURL)
             errorMessage = error.localizedDescription
         }
     }
@@ -285,7 +374,6 @@ struct EditorView: View {
 
         isExporting = true
         errorMessage = nil
-        exportedURL = nil
         defer { isExporting = false }
 
         do {
@@ -326,9 +414,76 @@ struct EditorView: View {
                     }
                 }
             }
+            discardTemporaryMedia(at: exportedURL)
             exportedURL = destination
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func discardTemporaryMedia(at url: URL?) {
+        guard let url else { return }
+        let temporaryDirectory = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        let filePath = url.standardizedFileURL.path
+        guard filePath.hasPrefix(temporaryDirectory + "/") else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private func clearTemporaryEditorMedia() {
+        discardTemporaryMedia(at: sourceURL)
+        discardTemporaryMedia(at: exportedURL)
+        player?.pause()
+        player = nil
+        sourceURL = nil
+        exportedURL = nil
+        sourceDuration = 0
+        videoComposition = nil
+    }
+
+    private var titleIsInvalid: Bool {
+        let title = exportTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty || title.count > 100
+    }
+
+    @MainActor
+    private func publishToYouTube() async {
+        guard let sourceURL, trimEnd > trimStart else {
+            publishErrorMessage = "Importa um arquivo original e marca o trecho que queres publicar."
+            return
+        }
+        guard hasPublishingRights, confirmsCommunityGuidelines, let madeForKids else { return }
+        guard trimEnd - trimStart <= 180 else {
+            publishErrorMessage = "Um Short pode ter até 3 minutos. Ajusta o fim do trecho."
+            return
+        }
+
+        isPublishing = true
+        publishErrorMessage = nil
+        publishStatusMessage = nil
+        defer {
+            isPublishing = false
+            if !editorIsVisible {
+                clearTemporaryEditorMedia()
+            }
+        }
+
+        do {
+            let supabaseToken = try await supabaseAuth.accessTokenForBackend()
+            let youtubeToken = try await youtube.accessTokenForPublishing()
+            let result = try await RenderShortsClient.publish(
+                sourceURL: sourceURL,
+                startSeconds: trimStart,
+                endSeconds: trimEnd,
+                title: exportTitle.trimmingCharacters(in: .whitespacesAndNewlines),
+                description: publishDescription,
+                privacyStatus: privacyStatus,
+                madeForKids: madeForKids,
+                supabaseAccessToken: supabaseToken,
+                youtubeAccessToken: youtubeToken
+            )
+            publishStatusMessage = "Publicado (\(result.privacyStatus)): \(result.watchURL.absoluteString)"
+        } catch {
+            publishErrorMessage = error.localizedDescription
         }
     }
 

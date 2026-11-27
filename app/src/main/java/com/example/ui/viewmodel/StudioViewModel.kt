@@ -1895,6 +1895,11 @@ class StudioViewModel(
         youtubeVideoId: String,
         forceRebuild: Boolean = false
     ): Result<File> {
+        if (youtubeVideoId.isNotBlank()) {
+            return Result.failure(
+                IllegalStateException("Abra o vídeo no YouTube. Para editar e publicar, escolha um arquivo de vídeo local autorizado.")
+            )
+        }
         if (!forceRebuild) {
             ShortVideoProcessor.getRenderedShortFile(context, clip.id)?.let { existing ->
                 _renderedClipIds.update { it + clip.id }
@@ -2109,7 +2114,9 @@ class StudioViewModel(
         context: Context,
         clip: StudioClip,
         activity: Activity? = null,
-        onNeedsUploadConsent: ((IntentSenderRequest) -> Unit)? = null
+        onNeedsUploadConsent: ((IntentSenderRequest) -> Unit)? = null,
+        privacyStatus: String = "unlisted",
+        madeForKids: Boolean = false
     ) {
         if (_youTubeUploadBusy.value || _shortExportState.value is ShortExportUiState.Processing) return
         viewModelScope.launch {
@@ -2118,7 +2125,9 @@ class StudioViewModel(
                 clip = clip,
                 existingFile = null,
                 activity = activity,
-                onNeedsUploadConsent = onNeedsUploadConsent
+                onNeedsUploadConsent = onNeedsUploadConsent,
+                privacyStatus = privacyStatus,
+                madeForKids = madeForKids
             )
         }
     }
@@ -2128,7 +2137,9 @@ class StudioViewModel(
         clip: StudioClip,
         existingFile: File? = null,
         activity: Activity? = null,
-        onNeedsUploadConsent: ((IntentSenderRequest) -> Unit)? = null
+        onNeedsUploadConsent: ((IntentSenderRequest) -> Unit)? = null,
+        privacyStatus: String = "unlisted",
+        madeForKids: Boolean = false
     ) {
         _youTubeUploadBusy.value = true
         _dualPublishStatus.value = DualPublishStatus(
@@ -2188,7 +2199,9 @@ class StudioViewModel(
                 accessToken = silentUploadToken,
                 mp4File = file,
                 title = clip.title,
-                description = clip.publishNotes.ifBlank { clip.hookText }
+                description = clip.publishNotes.ifBlank { clip.hookText },
+                privacyStatus = privacyStatus,
+                madeForKids = madeForKids
             )
             if (ytUploadRes.isSuccess) {
                 val uploaded = ytUploadRes.getOrThrow()
@@ -2354,7 +2367,10 @@ class StudioViewModel(
         clip: StudioClip,
         sendToYouTube: Boolean,
         sendToTikTok: Boolean,
+        title: String = clip.title,
         description: String,
+        privacyStatus: String = "unlisted",
+        madeForKids: Boolean = false,
         activity: Activity? = null,
         onNeedsUploadConsent: ((IntentSenderRequest) -> Unit)? = null
     ) {
@@ -2364,6 +2380,7 @@ class StudioViewModel(
         }
         val cleanDesc = description.trim()
         val updatedClip = clip.copy(
+            title = title.trim(),
             publishNotes = cleanDesc,
             targetPlatform = when {
                 sendToYouTube && sendToTikTok -> "BOTH"
@@ -2375,8 +2392,8 @@ class StudioViewModel(
             studioRepo.updateClipEditor(currentUserId, updatedClip)
         }
         when {
-            sendToYouTube && sendToTikTok -> publishClipToBothPlatforms(context, updatedClip, activity, onNeedsUploadConsent)
-            sendToYouTube -> publishClipToYouTube(context, updatedClip, activity, onNeedsUploadConsent, forceYouTubeOnly = true)
+            sendToYouTube && sendToTikTok -> publishClipToBothPlatforms(context, updatedClip, activity, onNeedsUploadConsent, privacyStatus, madeForKids)
+            sendToYouTube -> publishClipToYouTube(context, updatedClip, activity, onNeedsUploadConsent, forceYouTubeOnly = true, privacyStatus = privacyStatus, madeForKids = madeForKids)
             else -> publishClipToTikTok(context, updatedClip)
         }
     }
@@ -2386,12 +2403,14 @@ class StudioViewModel(
         clip: StudioClip,
         activity: Activity? = null,
         onNeedsUploadConsent: ((IntentSenderRequest) -> Unit)? = null,
-        forceYouTubeOnly: Boolean = false
+        forceYouTubeOnly: Boolean = false,
+        privacyStatus: String = "unlisted",
+        madeForKids: Boolean = false
     ) {
         if (_youTubeUploadBusy.value || _shortExportState.value is ShortExportUiState.Processing) return
         // "Da mesma forma que o YouTube, quando você manda para o YouTube, automaticamente manda para os dois":
         if (!forceYouTubeOnly && (_tikTokAccount.value.isConnected || _autoPublishOnCut.value)) {
-            publishClipToBothPlatforms(context, clip, activity, onNeedsUploadConsent)
+            publishClipToBothPlatforms(context, clip, activity, onNeedsUploadConsent, privacyStatus, madeForKids)
             return
         }
         viewModelScope.launch {
@@ -2415,7 +2434,9 @@ class StudioViewModel(
                     accessToken = uploadToken,
                     mp4File = file,
                     title = clip.title,
-                    description = clip.publishNotes.ifBlank { clip.hookText }
+                    description = clip.publishNotes.ifBlank { clip.hookText },
+                    privacyStatus = privacyStatus,
+                    madeForKids = madeForKids
                 )
                 if (uploadRes.isSuccess) {
                     val uploaded = uploadRes.getOrThrow()
@@ -2447,7 +2468,9 @@ class StudioViewModel(
                                 accessToken = token,
                                 mp4File = file,
                                 title = clip.title,
-                                description = clip.publishNotes.ifBlank { clip.hookText }
+                                description = clip.publishNotes.ifBlank { clip.hookText },
+                                privacyStatus = privacyStatus,
+                                madeForKids = madeForKids
                             )
                             _youTubeUploadBusy.value = false
                             if (res.isSuccess) {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct AppRootView: View {
     @State private var enteredStudio = false
@@ -47,7 +48,6 @@ private struct StudioTabView: View {
     @State private var didPresentInitialLibrary = false
     @State private var libraryFilter: YouTubeLibraryFilter = .all
     @State private var templateForEditor: String?
-    @State private var selectedYouTubeVideo: YouTubeVideo?
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -62,7 +62,9 @@ private struct StudioTabView: View {
 
             EditorView(
                 templateName: templateForEditor,
-                youtubeVideo: selectedYouTubeVideo
+                youtube: youtube,
+                supabaseAuth: supabaseAuth,
+                openConnections: { showingConnections = true }
             )
                 .tabItem { Label("Editor", systemImage: "scissors") }
                 .tag(StudioTab.editor)
@@ -103,9 +105,8 @@ private struct StudioTabView: View {
                     showingConnections = true
                 },
                 selectVideo: { video in
-                    selectedYouTubeVideo = video
                     showingLibrary = false
-                    selectedTab = .editor
+                    UIApplication.shared.open(video.watchURL)
                 }
             )
             .presentationDetents([.large])

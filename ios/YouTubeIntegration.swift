@@ -143,6 +143,39 @@ final class YouTubeConnectionStore: ObservableObject {
         nextPageToken = nil
     }
 
+    func accessTokenForPublishing() async throws -> String {
+        guard let signedInUser = googleUser else {
+            throw YouTubeIntegrationError.uploadSignInRequired
+        }
+        var user = try await signedInUser.refreshTokensIfNeeded()
+        let uploadScope = "https://www.googleapis.com/auth/youtube.upload"
+
+        if !(user.grantedScopes?.contains(uploadScope) ?? false) {
+            guard let presenter = Self.presentingViewController() else {
+                throw YouTubeIntegrationError.uploadConsentUnavailable
+            }
+            let result: GIDSignInResult = try await withCheckedThrowingContinuation { continuation in
+                user.addScopes([uploadScope], presenting: presenter) { signInResult, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let signInResult {
+                        continuation.resume(returning: signInResult)
+                    } else {
+                        continuation.resume(throwing: YouTubeIntegrationError.uploadConsentUnavailable)
+                    }
+                }
+            }
+            user = result.user
+        }
+
+        guard user.grantedScopes?.contains(uploadScope) == true else {
+            throw YouTubeIntegrationError.uploadConsentUnavailable
+        }
+        let refreshedUser = try await user.refreshTokensIfNeeded()
+        googleUser = refreshedUser
+        return refreshedUser.accessToken.tokenString
+    }
+
     private func restorePreviousSignIn() async {
         do {
             let user = try await GIDSignIn.sharedInstance.restorePreviousSignIn()
@@ -408,6 +441,8 @@ private enum YouTubeIntegrationError: LocalizedError {
     case invalidRequest
     case invalidResponse
     case unauthorized
+    case uploadSignInRequired
+    case uploadConsentUnavailable
     case api(status: Int, message: String?)
 
     var errorDescription: String? {
@@ -420,6 +455,10 @@ private enum YouTubeIntegrationError: LocalizedError {
             "A API do YouTube devolveu uma resposta inválida."
         case .unauthorized:
             "A autorização expirou. Desliga e liga novamente a conta Google."
+        case .uploadSignInRequired:
+            "Liga uma conta Google do YouTube antes de publicar."
+        case .uploadConsentUnavailable:
+            "A autorização youtube.upload não foi concedida."
         case let .api(status, message):
             message ?? "Erro da API YouTube (HTTP \(status)). Confirma se a YouTube Data API v3 está ativa e se os scopes foram aprovados."
         }

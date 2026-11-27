@@ -23,6 +23,15 @@ final class SupabaseAuthStore: ObservableObject {
 
     var isConfigured: Bool { client != nil }
 
+    func accessTokenForBackend() async throws -> String {
+        guard let client else {
+            throw configurationMessage.map { NSError(domain: "Supabase", code: 1, userInfo: [NSLocalizedDescriptionKey: $0]) }
+                ?? NSError(domain: "Supabase", code: 1, userInfo: [NSLocalizedDescriptionKey: "A configuração do Supabase está indisponível."])
+        }
+        let session = try await client.auth.session
+        return session.accessToken
+    }
+
     func restoreSession() async {
         guard let client, client.auth.currentSession != nil else { return }
         isLoading = true

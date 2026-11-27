@@ -89,7 +89,7 @@ struct YouTubeLibraryView: View {
                         .background(StudioTheme.panel, in: RoundedRectangle(cornerRadius: 12))
                         .padding(.horizontal, 18)
 
-                        Text("Escolhe um item para abrir o editor. Para cortar, também vais precisar do vídeo original guardado no iPhone.")
+                        Text("A biblioteca é para consultar e abrir os vídeos no YouTube. Para editar, usa um arquivo original escolhido no aparelho.")
                             .font(.caption)
                             .foregroundStyle(StudioTheme.secondaryText)
                             .multilineTextAlignment(.center)
